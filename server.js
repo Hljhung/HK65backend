@@ -1,74 +1,67 @@
-const express = require("express");
-const { Pool } = require("pg");
-const cors = require("cors");
+import express from "express";
+import cors from "cors";
+import pkg from "pg";
+
+const { Pool } = pkg;
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+const PORT = process.env.PORT || 10000;
 
-// Kết nối database qua DATABASE_URL (Render cung cấp)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// Khởi tạo DB (tạo bảng nếu chưa có)
-async function initDB() {
+app.use(cors());
+app.use(express.json());
+
+// Tạo bảng nếu chưa có
+(async () => {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS leaderboard (
-        username VARCHAR(50) PRIMARY KEY,
+        username TEXT PRIMARY KEY,
         score INT NOT NULL
-      );
+      )
     `);
-    console.log("✅ Database initialized");
+    console.log("✅ Bảng leaderboard đã sẵn sàng");
   } catch (err) {
-    console.error("❌ Failed to init DB:", err);
+    console.error("Lỗi tạo bảng:", err);
   }
-}
+})();
 
-// API: Lấy bảng xếp hạng (sắp xếp theo điểm giảm dần)
+// Lấy bảng xếp hạng
 app.get("/leaderboard", async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT username, score FROM leaderboard ORDER BY score DESC"
-    );
+    const result = await pool.query("SELECT * FROM leaderboard ORDER BY score DESC LIMIT 20");
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Database error" });
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// API: Gửi điểm
+// Gửi điểm
 app.post("/submit", async (req, res) => {
   const { username, score } = req.body;
-
   if (!username || typeof score !== "number") {
-    return res.status(400).json({ error: "Invalid input" });
+    return res.status(400).json({ error: "Dữ liệu không hợp lệ" });
   }
 
   try {
-    await pool.query(
-      `
-      INSERT INTO leaderboard (username, score)
-      VALUES ($1, $2)
-      ON CONFLICT (username)
-      DO UPDATE SET score = GREATEST(leaderboard.score, EXCLUDED.score);
-      `,
-      [username, score]
-    );
-
-    res.json({ success: true, message: "Score saved successfully!" });
+    const result = await pool.query("SELECT * FROM leaderboard WHERE username=$1", [username]);
+    if (result.rows.length === 0) {
+      await pool.query("INSERT INTO leaderboard (username, score) VALUES ($1, $2)", [username, score]);
+    } else {
+      if (score > result.rows[0].score) {
+        await pool.query("UPDATE leaderboard SET score=$1 WHERE username=$2", [score, username]);
+      }
+    }
+    res.json({ message: "Đã lưu điểm thành công" });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Database error" });
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// Khởi chạy server
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, async () => {
-  console.log(`✅ Server running on ${PORT}`);
-  await initDB();
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
