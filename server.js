@@ -1,67 +1,78 @@
-import express from "express";
-import cors from "cors";
-import pkg from "pg";
-
-const { Pool } = pkg;
+const express = require("express");
+const cors = require("cors");
+const { Pool } = require("pg");
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+app.use(cors());
+app.use(express.json());
 
+// 🔑 Render tự cấp DATABASE_URL trong Environment
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-app.use(cors());
-app.use(express.json());
-
 // Tạo bảng nếu chưa có
 (async () => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS leaderboard (
-        username TEXT PRIMARY KEY,
-        score INT NOT NULL
-      )
-    `);
-    console.log("✅ Bảng leaderboard đã sẵn sàng");
-  } catch (err) {
-    console.error("Lỗi tạo bảng:", err);
-  }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS leaderboard (
+      id SERIAL PRIMARY KEY,
+      name TEXT UNIQUE,
+      score INT
+    )
+  `);
 })();
 
-// Lấy bảng xếp hạng
+// ✅ Lấy toàn bộ leaderboard
 app.get("/leaderboard", async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM leaderboard ORDER BY score DESC LIMIT 20");
+    const result = await pool.query("SELECT name, score FROM leaderboard ORDER BY score DESC");
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: "Server error" });
+    console.error(err);
+    res.status(500).send("Lỗi server");
   }
 });
 
-// Gửi điểm
-app.post("/submit", async (req, res) => {
-  const { username, score } = req.body;
-  if (!username || typeof score !== "number") {
-    return res.status(400).json({ error: "Dữ liệu không hợp lệ" });
+// ✅ Lưu điểm
+app.post("/leaderboard", async (req, res) => {
+  const { name, score } = req.body;
+  if (!name || score === undefined) {
+    return res.status(400).send("Thiếu dữ liệu");
   }
 
   try {
-    const result = await pool.query("SELECT * FROM leaderboard WHERE username=$1", [username]);
-    if (result.rows.length === 0) {
-      await pool.query("INSERT INTO leaderboard (username, score) VALUES ($1, $2)", [username, score]);
-    } else {
-      if (score > result.rows[0].score) {
-        await pool.query("UPDATE leaderboard SET score=$1 WHERE username=$2", [score, username]);
+    const existing = await pool.query("SELECT * FROM leaderboard WHERE name = $1", [name]);
+
+    if (existing.rows.length > 0) {
+      // Nếu có thì update nếu điểm mới cao hơn
+      if (score > existing.rows[0].score) {
+        await pool.query("UPDATE leaderboard SET score = $1 WHERE name = $2", [score, name]);
       }
+    } else {
+      // Nếu chưa có thì thêm mới
+      await pool.query("INSERT INTO leaderboard (name, score) VALUES ($1, $2)", [name, score]);
     }
-    res.json({ message: "Đã lưu điểm thành công" });
+
+    res.send("Đã lưu điểm");
   } catch (err) {
-    res.status(500).json({ error: "Server error" });
+    console.error(err);
+    res.status(500).send("Lỗi server");
   }
 });
 
+// ✅ Reset bảng xếp hạng (dành cho admin hljhung)
+app.post("/reset", async (req, res) => {
+  try {
+    await pool.query("DELETE FROM leaderboard");
+    res.send("Đã reset bảng xếp hạng");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Lỗi khi reset");
+  }
+});
+
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`Server running on ${PORT}`);
 });
